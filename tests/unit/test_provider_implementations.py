@@ -194,13 +194,12 @@ class TestDiagramGenerator:
         assert generator is not None
         assert generator.provider == "anthropic"
 
-    @patch('app.providers.diagram_generator.tempfile')
-    @patch('app.providers.diagram_generator.subprocess')
+    @patch('app.providers.diagram_generator.httpx')
     @patch('app.providers.diagram_generator.AsyncOpenAI')
     @patch('app.providers.diagram_generator.settings')
     @pytest.mark.asyncio
-    async def test_generate_mermaid(self, mock_settings, mock_openai_class, mock_subprocess, mock_tempfile):
-        """Test Mermaid diagram generation."""
+    async def test_generate_mermaid(self, mock_settings, mock_openai_class, mock_httpx):
+        """Test Mermaid diagram generation using mermaid.ink API."""
         mock_settings.OPENAI_API_KEY = "test-key"
         mock_settings.OPENAI_MODEL = "gpt-4o-mini"
         
@@ -215,22 +214,20 @@ class TestDiagramGenerator:
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
         mock_openai_class.return_value = mock_client
         
-        # Mock tempfile
-        mock_tempfile.NamedTemporaryFile.return_value.__enter__.return_value.name = "/tmp/test.mmd"
+        # Mock httpx for mermaid.ink API call
+        mock_http_client = Mock()
+        mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
+        mock_http_client.__aexit__ = AsyncMock(return_value=None)
+        mock_response_http = Mock()
+        mock_response_http.status_code = 200
+        mock_response_http.content = b"image_data"
+        mock_http_client.get = AsyncMock(return_value=mock_response_http)
+        mock_httpx.AsyncClient.return_value = mock_http_client
         
-        # Mock subprocess for rendering
-        mock_subprocess.run.return_value = Mock(returncode=0)
-        
-        # Mock file operations
-        mock_file_content = b"image_data"
-        with patch('builtins.open', create=True) as mock_open, \
-             patch('base64.b64encode', return_value=b'base64string'), \
-             patch('os.path.exists', return_value=True), \
-             patch('os.remove'):
-            mock_file = Mock()
-            mock_file.read.return_value = mock_file_content
-            mock_open.return_value.__enter__.return_value = mock_file
-            
+        # Mock base64 encoding
+        mock_b64_result = Mock()
+        mock_b64_result.decode.return_value = 'base64string'
+        with patch('app.providers.diagram_generator.base64.b64encode', return_value=mock_b64_result):
             generator = DiagramGenerator(provider="openai")
             result = await generator.generate(
                 description="A simple flowchart",
@@ -242,6 +239,7 @@ class TestDiagramGenerator:
             assert "b64_json" in result
             assert "code" in result
             assert "format" in result
+            assert result["code"] == "graph TD\nA[Start] --> B[End]"
 
 
 class TestVideoGenerator:
