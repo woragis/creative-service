@@ -18,6 +18,7 @@ from app.graceful_shutdown import lifespan
 from app.cost_tracking import cost_tracker, estimate_request_cost
 from app.caching import get_cache_manager
 from app.routing import select_provider, execute_with_fallback
+from app.cost_control import estimate_and_check_cost, get_budget_tracker
 from prometheus_fastapi_instrumentator import Instrumentator
 
 
@@ -161,8 +162,15 @@ async def generate_images(req: ImageGenerationRequest):
             cost_mode="balanced"
         )
         
-        # Track cost
-        estimated_cost = estimate_request_cost(selected_provider, "/v1/images/generate")
+        # Check budget before proceeding
+        estimated_cost, budget_allowed, budget_error = estimate_and_check_cost(
+            selected_provider, "/v1/images/generate"
+        )
+        
+        if not budget_allowed:
+            logger.warn("Budget limit exceeded", error=budget_error, provider=selected_provider)
+            raise HTTPException(status_code=429, detail=budget_error)
+        
         cost_tracker.record_api_call(selected_provider, "default")
         
         async def generate_with_provider(provider_name: str):
@@ -206,8 +214,10 @@ async def generate_images(req: ImageGenerationRequest):
         for item in results:
             normalized.append(ImageData(url=item.get("url"), b64_json=item.get("b64_json")))
         
-        # Track cost
+        # Track cost and record spending
         cost_tracker.record_request("/v1/images/generate", selected_provider, estimated_cost)
+        budget_tracker = get_budget_tracker()
+        budget_tracker.record_spend(estimated_cost)
         
         response = ImageGenerationResponse(
             data=normalized,
@@ -331,6 +341,23 @@ def reload_routing_policies():
     policy_loader.reload()
     logger.info("Routing policies reloaded")
     return {"status": "success", "message": "Routing policies reloaded"}
+
+
+@app.post("/v1/cost-control/reload")
+def reload_cost_control_policies():
+    """Reload cost control policies (hot reload)."""
+    from app.cost_control.policy import get_cost_control_policy_loader
+    policy_loader = get_cost_control_policy_loader()
+    policy_loader.reload()
+    logger.info("Cost control policies reloaded")
+    return {"status": "success", "message": "Cost control policies reloaded"}
+
+
+@app.get("/v1/cost-control/budget")
+def get_budget_status():
+    """Get current budget status."""
+    budget_tracker = get_budget_tracker()
+    return budget_tracker.get_status()
 
 
 @app.get("/v1/providers/diagrams")
