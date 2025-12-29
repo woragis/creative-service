@@ -1,0 +1,23 @@
+version: "1.0.0"
+feature_flags:
+  streaming_enabled: true
+  caching_enabled: true
+  
+  providers:
+    openai: true
+    stable_diffusion: true
+    cipher: true
+    replicate: true
+    runway: true
+  
+  endpoints:
+    image_generation: true
+    diagram_generation: true
+    video_generation: true
+    image_animation: true
+  
+  custom_flags:
+    advanced_prompting: true
+    image_upscaling: false
+    batch_generation: true
+

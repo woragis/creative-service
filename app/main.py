@@ -21,6 +21,7 @@ from app.routing import select_provider, execute_with_fallback
 from app.cost_control import estimate_and_check_cost, get_budget_tracker
 from app.security import check_content_filter, detect_prompt_injection, detect_and_mask_pii, sanitize_response
 from app.quality import check_toxicity, validate_output_format, check_quality
+from app.features import is_feature_enabled
 from prometheus_fastapi_instrumentator import Instrumentator
 
 
@@ -148,6 +149,15 @@ async def generate_images(req: ImageGenerationRequest):
     """Generate images using various AI providers."""
     logger.info("Image generation request", provider=req.provider, style=req.style)
     
+    # Check feature flag
+    if not is_feature_enabled("endpoints.image_generation"):
+        raise HTTPException(status_code=503, detail="Image generation endpoint is disabled")
+    
+    # Check provider feature flag
+    provider_flag = f"providers.{req.provider}"
+    if not is_feature_enabled(provider_flag):
+        raise HTTPException(status_code=400, detail=f"Provider {req.provider} is disabled")
+    
     # Security checks on prompt
     content_allowed, content_error = check_content_filter(req.prompt)
     if not content_allowed:
@@ -171,14 +181,15 @@ async def generate_images(req: ImageGenerationRequest):
         logger.warn("Toxicity detected in prompt", score=toxicity_score, warning=toxicity_warning)
         raise HTTPException(status_code=400, detail=toxicity_warning)
     
-    # Check cache
+    # Check cache (if enabled)
     cache_manager = get_cache_manager()
     cache_key = f"image:{req.provider}:{req.prompt}:{req.style}:{req.size or 'default'}"
-    cached_response = cache_manager.get(cache_key)
-    
-    if cached_response is not None:
-        logger.info("Cache hit for image generation", provider=req.provider)
-        return cached_response
+    cached_response = None
+    if is_feature_enabled("caching_enabled"):
+        cached_response = cache_manager.get(cache_key)
+        if cached_response is not None:
+            logger.info("Cache hit for image generation", provider=req.provider)
+            return cached_response
     
     try:
         # Select provider using routing policies
@@ -265,8 +276,9 @@ async def generate_images(req: ImageGenerationRequest):
         sanitized_response = sanitize_response(response.dict())
         response = ImageGenerationResponse(**sanitized_response)
         
-        # Store in cache
-        cache_manager.set(cache_key, response, "/v1/images/generate")
+        # Store in cache (if enabled)
+        if is_feature_enabled("caching_enabled"):
+            cache_manager.set(cache_key, response, "/v1/images/generate")
         
         return response
     except Exception as e:
@@ -286,6 +298,15 @@ async def generate_thumbnail(req: ImageGenerationRequest):
 async def generate_diagram(req: DiagramGenerationRequest):
     """Generate technical diagrams using AI-generated code (Mermaid/Graphviz)."""
     logger.info("Diagram generation request", diagram_type=req.diagram_type, diagram_kind=req.diagram_kind)
+    
+    # Check feature flag
+    if not is_feature_enabled("endpoints.diagram_generation"):
+        raise HTTPException(status_code=503, detail="Diagram generation endpoint is disabled")
+    
+    # Check provider feature flag
+    provider_flag = f"providers.{req.ai_provider}"
+    if not is_feature_enabled(provider_flag):
+        raise HTTPException(status_code=400, detail=f"Provider {req.ai_provider} is disabled")
     
     try:
         generator = DiagramProviderFactory.create(req.ai_provider)
@@ -329,6 +350,15 @@ async def generate_mermaid_diagram(
 async def generate_video(req: VideoGenerationRequest):
     """Generate a video/GIF from an image using AI."""
     logger.info("Video generation request", provider=req.provider)
+    
+    # Check feature flag
+    if not is_feature_enabled("endpoints.video_generation"):
+        raise HTTPException(status_code=503, detail="Video generation endpoint is disabled")
+    
+    # Check provider feature flag
+    provider_flag = f"providers.{req.provider}"
+    if not is_feature_enabled(provider_flag):
+        raise HTTPException(status_code=400, detail=f"Provider {req.provider} is disabled")
     
     if not req.image_url and not req.image_b64:
         raise HTTPException(status_code=400, detail="Either image_url or image_b64 must be provided")
@@ -418,6 +448,41 @@ def reload_quality_policies():
     policy_loader.reload()
     logger.info("Quality policies reloaded")
     return {"status": "success", "message": "Quality policies reloaded"}
+
+
+@app.post("/v1/feature-flags/reload")
+def reload_feature_flags():
+    """Reload feature flags (hot reload)."""
+    from app.features.policy import get_feature_flags_loader
+    policy_loader = get_feature_flags_loader()
+    policy_loader.reload()
+    logger.info("Feature flags reloaded")
+    return {"status": "success", "message": "Feature flags reloaded"}
+
+
+@app.get("/v1/feature-flags")
+def get_feature_flags():
+    """Get current feature flags status."""
+    from app.features.policy import get_feature_flags_loader
+    policy = get_feature_flags_loader().get_policy()
+    return {
+        "streaming_enabled": policy.streaming_enabled,
+        "caching_enabled": policy.caching_enabled,
+        "providers": {
+            "openai": policy.providers.openai,
+            "stable_diffusion": policy.providers.stable_diffusion,
+            "cipher": policy.providers.cipher,
+            "replicate": policy.providers.replicate,
+            "runway": policy.providers.runway,
+        },
+        "endpoints": {
+            "image_generation": policy.endpoints.image_generation,
+            "diagram_generation": policy.endpoints.diagram_generation,
+            "video_generation": policy.endpoints.video_generation,
+            "image_animation": policy.endpoints.image_animation,
+        },
+        "custom_flags": policy.custom_flags,
+    }
 
 
 @app.get("/v1/providers/diagrams")
