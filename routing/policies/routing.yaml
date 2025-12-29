@@ -1,0 +1,39 @@
+version: "1.0.0"
+routing:
+  default_provider: "openai"
+  providers:
+    - name: "openai"
+      enabled: true
+      priority: 1
+      cost_tier: "medium"
+      quality_tier: "high"
+      fallback_to: ["stable-diffusion", "cipher"]
+    
+    - name: "stable-diffusion"
+      enabled: true
+      priority: 2
+      cost_tier: "low"
+      quality_tier: "medium"
+      fallback_to: ["cipher"]
+    
+    - name: "cipher"
+      enabled: true
+      priority: 3
+      cost_tier: "low"
+      quality_tier: "low"
+      fallback_to: []
+    
+    - name: "replicate"
+      enabled: true
+      priority: 2
+      cost_tier: "medium"
+      quality_tier: "high"
+      fallback_to: ["runway"]
+    
+    - name: "runway"
+      enabled: true
+      priority: 3
+      cost_tier: "high"
+      quality_tier: "high"
+      fallback_to: []
+

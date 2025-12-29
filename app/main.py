@@ -17,6 +17,7 @@ from app.tracing import init_tracing
 from app.graceful_shutdown import lifespan
 from app.cost_tracking import cost_tracker, estimate_request_cost
 from app.caching import get_cache_manager
+from app.routing import select_provider, execute_with_fallback
 from prometheus_fastapi_instrumentator import Instrumentator
 
 
@@ -154,36 +155,51 @@ async def generate_images(req: ImageGenerationRequest):
         return cached_response
     
     try:
+        # Select provider using routing policies
+        selected_provider, fallback_chain = select_provider(
+            requested_provider=req.provider,
+            cost_mode="balanced"
+        )
+        
         # Track cost
-        estimated_cost = estimate_request_cost(req.provider, "/v1/images/generate")
-        cost_tracker.record_api_call(req.provider, "default")
+        estimated_cost = estimate_request_cost(selected_provider, "/v1/images/generate")
+        cost_tracker.record_api_call(selected_provider, "default")
         
-        provider = ImageProviderFactory.create(req.provider)
-        
-        # Use enhanced prompt for OpenAI if style is provided
-        if req.provider == "openai" and req.style:
-            results = await provider.generate_with_enhanced_prompt(
-                base_prompt=req.prompt,
-                style=req.style,
-                context=req.context,
-                size=req.size,
-                n=req.n,
-            )
-        elif req.provider == "stable-diffusion":
-            # Use technical diagram generation for stable diffusion if context suggests it
-            if req.context and ("architecture" in req.context.lower() or "microservice" in req.context.lower() or "diagram" in req.prompt.lower()):
-                results = await provider.generate_technical_diagram(
-                    description=req.prompt,
-                    diagram_type="architecture" if "architecture" in req.context.lower() else "flowchart",
+        async def generate_with_provider(provider_name: str):
+            provider = ImageProviderFactory.create(provider_name)
+            
+            # Use enhanced prompt for OpenAI if style is provided
+            if provider_name == "openai" and req.style:
+                return await provider.generate_with_enhanced_prompt(
+                    base_prompt=req.prompt,
+                    style=req.style,
+                    context=req.context,
+                    size=req.size,
+                    n=req.n,
                 )
+            elif provider_name == "stable-diffusion":
+                # Use technical diagram generation for stable diffusion if context suggests it
+                if req.context and ("architecture" in req.context.lower() or "microservice" in req.context.lower() or "diagram" in req.prompt.lower()):
+                    return await provider.generate_technical_diagram(
+                        description=req.prompt,
+                        diagram_type="architecture" if "architecture" in req.context.lower() else "flowchart",
+                    )
+                else:
+                    return await provider.generate(prompt=req.prompt, **({"width": 1024, "height": 1024} if req.size else {}))
             else:
-                results = await provider.generate(prompt=req.prompt, **({"width": 1024, "height": 1024} if req.size else {}))
-        else:
-            results = await provider.generate(
-                prompt=req.prompt,
-                size=req.size,
-                n=req.n,
-            )
+                return await provider.generate(
+                    prompt=req.prompt,
+                    size=req.size,
+                    n=req.n,
+                )
+        
+        # Execute with fallback chain
+        results = await execute_with_fallback(
+            provider=selected_provider,
+            fallback_chain=fallback_chain,
+            execution_function=generate_with_provider,
+            endpoint="/v1/images/generate"
+        )
         
         # Normalize to ImageData format
         normalized = []
@@ -191,11 +207,11 @@ async def generate_images(req: ImageGenerationRequest):
             normalized.append(ImageData(url=item.get("url"), b64_json=item.get("b64_json")))
         
         # Track cost
-        cost_tracker.record_request("/v1/images/generate", req.provider, estimated_cost)
+        cost_tracker.record_request("/v1/images/generate", selected_provider, estimated_cost)
         
         response = ImageGenerationResponse(
             data=normalized,
-            provider=req.provider,
+            provider=selected_provider,
             prompt=req.prompt,
         )
         
@@ -305,6 +321,16 @@ def list_image_providers():
             "cipher": "Cipher/NoFilterGPT - Alternative provider",
         }
     }
+
+
+@app.post("/v1/routing/reload")
+def reload_routing_policies():
+    """Reload routing policies (hot reload)."""
+    from app.routing.policy import get_routing_policy_loader
+    policy_loader = get_routing_policy_loader()
+    policy_loader.reload()
+    logger.info("Routing policies reloaded")
+    return {"status": "success", "message": "Routing policies reloaded"}
 
 
 @app.get("/v1/providers/diagrams")
