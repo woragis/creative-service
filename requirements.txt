@@ -19,6 +19,9 @@ opentelemetry-exporter-otlp-proto-http==1.20.0
 opentelemetry-instrumentation-fastapi==0.41b0
 opentelemetry-instrumentation-requests==0.41b0
 
+# YAML support for policies
+pyyaml==6.0.1
+
 # Testing dependencies
 pytest==8.3.3
 pytest-asyncio==0.24.0

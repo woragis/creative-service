@@ -1,0 +1,39 @@
+version: "1.0.0"
+resilience:
+  retry:
+    enabled: true
+    max_attempts: 3
+    initial_delay_seconds: 0.5
+    backoff_factor: 2.0
+    max_delay_seconds: 10.0
+    retry_on_status_codes: [429, 500, 502, 503, 504]
+    retry_on_exceptions: ["httpx.ConnectError", "httpx.TimeoutException"]
+  
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    recovery_timeout_seconds: 60
+    minimum_requests: 10
+  
+  timeout:
+    enabled: true
+    default_timeout_seconds: 120  # Image/video generation takes longer
+    per_provider_timeouts:
+      openai: 120
+      stable-diffusion: 180  # Replicate can be slower
+      cipher: 90
+      replicate: 300  # Video generation takes longer
+      runway: 300
+    per_endpoint_timeouts:
+      /v1/images/generate: 120
+      /v1/images/generate/thumbnail: 120
+      /v1/diagrams/generate: 60
+      /v1/videos/generate: 300
+      /v1/videos/animate: 300
+  
+  degradation:
+    enabled: false
+    degrade_to_provider: "cipher"  # Fallback to cheaper provider
+    degrade_to_model: null
+    message: "Due to high load, we are currently using a simpler provider. Please try again later for full capabilities."
+

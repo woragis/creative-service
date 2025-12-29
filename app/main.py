@@ -22,6 +22,8 @@ from app.cost_control import estimate_and_check_cost, get_budget_tracker
 from app.security import check_content_filter, detect_prompt_injection, detect_and_mask_pii, sanitize_response
 from app.quality import check_toxicity, validate_output_format, check_quality
 from app.features import is_feature_enabled
+from app.resilience import retry_with_backoff, get_circuit_breaker_manager
+from app.resilience.timeout import apply_timeout as execute_with_timeout
 from prometheus_fastapi_instrumentator import Instrumentator
 
 
@@ -210,32 +212,55 @@ async def generate_images(req: ImageGenerationRequest):
         cost_tracker.record_api_call(selected_provider, "default")
         
         async def generate_with_provider(provider_name: str):
+            # Check circuit breaker
+            circuit_breaker = get_circuit_breaker_manager().get_breaker(provider_name)
+            if not circuit_breaker.can_attempt():
+                raise Exception(f"Circuit breaker is OPEN for provider {provider_name}")
+            
             provider = ImageProviderFactory.create(provider_name)
             
-            # Use enhanced prompt for OpenAI if style is provided
-            if provider_name == "openai" and req.style:
-                return await provider.generate_with_enhanced_prompt(
-                    base_prompt=req.prompt,
-                    style=req.style,
-                    context=req.context,
-                    size=req.size,
-                    n=req.n,
-                )
-            elif provider_name == "stable-diffusion":
-                # Use technical diagram generation for stable diffusion if context suggests it
-                if req.context and ("architecture" in req.context.lower() or "microservice" in req.context.lower() or "diagram" in req.prompt.lower()):
-                    return await provider.generate_technical_diagram(
-                        description=req.prompt,
-                        diagram_type="architecture" if "architecture" in req.context.lower() else "flowchart",
+            async def _generate():
+                # Use enhanced prompt for OpenAI if style is provided
+                if provider_name == "openai" and req.style:
+                    return await provider.generate_with_enhanced_prompt(
+                        base_prompt=req.prompt,
+                        style=req.style,
+                        context=req.context,
+                        size=req.size,
+                        n=req.n,
                     )
+                elif provider_name == "stable-diffusion":
+                    # Use technical diagram generation for stable diffusion if context suggests it
+                    if req.context and ("architecture" in req.context.lower() or "microservice" in req.context.lower() or "diagram" in req.prompt.lower()):
+                        return await provider.generate_technical_diagram(
+                            description=req.prompt,
+                            diagram_type="architecture" if "architecture" in req.context.lower() else "flowchart",
+                        )
+                    else:
+                        return await provider.generate(prompt=req.prompt, **({"width": 1024, "height": 1024} if req.size else {}))
                 else:
-                    return await provider.generate(prompt=req.prompt, **({"width": 1024, "height": 1024} if req.size else {}))
-            else:
-                return await provider.generate(
-                    prompt=req.prompt,
-                    size=req.size,
-                    n=req.n,
+                    return await provider.generate(
+                        prompt=req.prompt,
+                        size=req.size,
+                        n=req.n,
+                    )
+            
+            # Execute with resilience (retry, timeout, circuit breaker)
+            try:
+                # Wrap with retry, then timeout
+                async def _generate_with_retry():
+                    return await retry_with_backoff(_generate, retry_policy_name=provider_name)
+                
+                result = await execute_with_timeout(
+                    _generate_with_retry,
+                    provider_name=provider_name,
+                    endpoint="/v1/images/generate"
                 )
+                circuit_breaker.record_success()
+                return result
+            except Exception as e:
+                circuit_breaker.record_failure()
+                raise
         
         # Execute with fallback chain
         results = await execute_with_fallback(
@@ -308,21 +333,100 @@ async def generate_diagram(req: DiagramGenerationRequest):
     if not is_feature_enabled(provider_flag):
         raise HTTPException(status_code=400, detail=f"Provider {req.ai_provider} is disabled")
     
+    # Security checks on description
+    content_allowed, content_error = check_content_filter(req.description)
+    if not content_allowed:
+        logger.warn("Content filter blocked request", error=content_error)
+        raise HTTPException(status_code=400, detail=content_error)
+    
+    prompt_safe, prompt_warning = detect_prompt_injection(req.description)
+    if not prompt_safe:
+        logger.warn("Prompt injection detected", warning=prompt_warning)
+        raise HTTPException(status_code=400, detail=prompt_warning)
+    
+    # Detect and mask PII
+    sanitized_description, pii_detected = detect_and_mask_pii(req.description)
+    if pii_detected:
+        logger.warn("PII detected in description, using masked version")
+        req.description = sanitized_description
+    
+    # Check toxicity
+    prompt_safe, toxicity_warning, toxicity_score = check_toxicity(req.description)
+    if not prompt_safe:
+        logger.warn("Toxicity detected", score=toxicity_score, warning=toxicity_warning)
+        raise HTTPException(status_code=400, detail=toxicity_warning)
+    
+    # Check budget
+    estimated_cost, budget_allowed, budget_error = estimate_and_check_cost(
+        req.ai_provider, "/v1/diagrams/generate"
+    )
+    if not budget_allowed:
+        logger.warn("Budget limit exceeded", error=budget_error, provider=req.ai_provider)
+        raise HTTPException(status_code=429, detail=budget_error)
+    
+    cost_tracker.record_api_call(req.ai_provider, "default")
+    
     try:
-        generator = DiagramProviderFactory.create(req.ai_provider)
-        result = await generator.generate(
-            description=req.description,
-            diagram_type=req.diagram_type,
-            diagram_kind=req.diagram_kind,
-            output_format=req.output_format,
-        )
+        # Check circuit breaker
+        circuit_breaker = get_circuit_breaker_manager().get_breaker(req.ai_provider)
+        if not circuit_breaker.can_attempt():
+            raise HTTPException(status_code=503, detail=f"Circuit breaker is OPEN for provider {req.ai_provider}")
         
-        return DiagramGenerationResponse(
+        generator = DiagramProviderFactory.create(req.ai_provider)
+        
+        async def _generate():
+            return await generator.generate(
+                description=req.description,
+                diagram_type=req.diagram_type,
+                diagram_kind=req.diagram_kind,
+                output_format=req.output_format,
+            )
+        
+        # Execute with resilience
+        try:
+            async def _generate_with_retry():
+                return await retry_with_backoff(_generate, retry_policy_name=req.ai_provider)
+            
+            result = await execute_with_timeout(
+                _generate_with_retry,
+                provider_name=req.ai_provider,
+                endpoint="/v1/diagrams/generate"
+            )
+            circuit_breaker.record_success()
+        except Exception as e:
+            circuit_breaker.record_failure()
+            raise
+        
+        # Track cost
+        cost_tracker.record_request("/v1/diagrams/generate", req.ai_provider, estimated_cost)
+        budget_tracker = get_budget_tracker()
+        budget_tracker.record_spend(estimated_cost)
+        
+        response = DiagramGenerationResponse(
             b64_json=result["b64_json"],
             code=result["code"],
             format=result["format"],
             diagram_type=req.diagram_type,
         )
+        
+        # Quality checks
+        format_valid, format_error = validate_output_format(response.dict())
+        if not format_valid:
+            logger.warn("Format validation failed", error=format_error)
+            raise HTTPException(status_code=500, detail=format_error)
+        
+        quality_valid, quality_error = check_quality(response.dict(), req.description, "/v1/diagrams/generate")
+        if not quality_valid:
+            logger.warn("Quality check failed", error=quality_error)
+            raise HTTPException(status_code=500, detail=quality_error)
+        
+        # Sanitize response
+        sanitized_response = sanitize_response(response.dict())
+        response = DiagramGenerationResponse(**sanitized_response)
+        
+        return response
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Diagram generation error", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -363,20 +467,76 @@ async def generate_video(req: VideoGenerationRequest):
     if not req.image_url and not req.image_b64:
         raise HTTPException(status_code=400, detail="Either image_url or image_b64 must be provided")
     
+    # Check budget
+    estimated_cost, budget_allowed, budget_error = estimate_and_check_cost(
+        req.provider, "/v1/videos/generate"
+    )
+    if not budget_allowed:
+        logger.warn("Budget limit exceeded", error=budget_error, provider=req.provider)
+        raise HTTPException(status_code=429, detail=budget_error)
+    
+    cost_tracker.record_api_call(req.provider, "default")
+    
     try:
-        generator = VideoProviderFactory.create(req.provider)
-        result = await generator.generate_from_image(
-            image_url=req.image_url,
-            image_b64=req.image_b64,
-            motion_bucket_id=req.motion_bucket_id,
-            num_frames=req.num_frames,
-        )
+        # Check circuit breaker
+        circuit_breaker = get_circuit_breaker_manager().get_breaker(req.provider)
+        if not circuit_breaker.can_attempt():
+            raise HTTPException(status_code=503, detail=f"Circuit breaker is OPEN for provider {req.provider}")
         
-        return VideoGenerationResponse(
+        generator = VideoProviderFactory.create(req.provider)
+        
+        async def _generate():
+            return await generator.generate_from_image(
+                image_url=req.image_url,
+                image_b64=req.image_b64,
+                motion_bucket_id=req.motion_bucket_id,
+                num_frames=req.num_frames,
+            )
+        
+        # Execute with resilience
+        try:
+            async def _generate_with_retry():
+                return await retry_with_backoff(_generate, retry_policy_name=req.provider)
+            
+            result = await execute_with_timeout(
+                _generate_with_retry,
+                provider_name=req.provider,
+                endpoint="/v1/videos/generate"
+            )
+            circuit_breaker.record_success()
+        except Exception as e:
+            circuit_breaker.record_failure()
+            raise
+        
+        # Track cost
+        cost_tracker.record_request("/v1/videos/generate", req.provider, estimated_cost)
+        budget_tracker = get_budget_tracker()
+        budget_tracker.record_spend(estimated_cost)
+        
+        response = VideoGenerationResponse(
             video_url=result.get("video_url"),
             video_b64=result.get("video_b64"),
             format=result.get("format", "mp4"),
         )
+        
+        # Quality checks
+        format_valid, format_error = validate_output_format(response.dict())
+        if not format_valid:
+            logger.warn("Format validation failed", error=format_error)
+            raise HTTPException(status_code=500, detail=format_error)
+        
+        quality_valid, quality_error = check_quality(response.dict(), "", "/v1/videos/generate")
+        if not quality_valid:
+            logger.warn("Quality check failed", error=quality_error)
+            raise HTTPException(status_code=500, detail=quality_error)
+        
+        # Sanitize response
+        sanitized_response = sanitize_response(response.dict())
+        response = VideoGenerationResponse(**sanitized_response)
+        
+        return response
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Video generation error", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
