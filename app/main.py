@@ -20,6 +20,7 @@ from app.caching import get_cache_manager
 from app.routing import select_provider, execute_with_fallback
 from app.cost_control import estimate_and_check_cost, get_budget_tracker
 from app.security import check_content_filter, detect_prompt_injection, detect_and_mask_pii, sanitize_response
+from app.quality import check_toxicity, validate_output_format, check_quality
 from prometheus_fastapi_instrumentator import Instrumentator
 
 
@@ -164,6 +165,12 @@ async def generate_images(req: ImageGenerationRequest):
         logger.warn("PII detected in prompt, using masked version")
         req.prompt = sanitized_prompt
     
+    # Check toxicity in prompt
+    prompt_safe, toxicity_warning, toxicity_score = check_toxicity(req.prompt)
+    if not prompt_safe:
+        logger.warn("Toxicity detected in prompt", score=toxicity_score, warning=toxicity_warning)
+        raise HTTPException(status_code=400, detail=toxicity_warning)
+    
     # Check cache
     cache_manager = get_cache_manager()
     cache_key = f"image:{req.provider}:{req.prompt}:{req.style}:{req.size or 'default'}"
@@ -242,6 +249,17 @@ async def generate_images(req: ImageGenerationRequest):
             provider=selected_provider,
             prompt=req.prompt,
         )
+        
+        # Quality checks
+        format_valid, format_error = validate_output_format(response.dict())
+        if not format_valid:
+            logger.warn("Format validation failed", error=format_error)
+            raise HTTPException(status_code=500, detail=format_error)
+        
+        quality_valid, quality_error = check_quality(response.dict(), req.prompt, "/v1/images/generate")
+        if not quality_valid:
+            logger.warn("Quality check failed", error=quality_error)
+            raise HTTPException(status_code=500, detail=quality_error)
         
         # Sanitize response
         sanitized_response = sanitize_response(response.dict())
@@ -390,6 +408,16 @@ def reload_security_policies():
     policy_loader.reload()
     logger.info("Security policies reloaded")
     return {"status": "success", "message": "Security policies reloaded"}
+
+
+@app.post("/v1/quality/reload")
+def reload_quality_policies():
+    """Reload quality policies (hot reload)."""
+    from app.quality.policy import get_quality_policy_loader
+    policy_loader = get_quality_policy_loader()
+    policy_loader.reload()
+    logger.info("Quality policies reloaded")
+    return {"status": "success", "message": "Quality policies reloaded"}
 
 
 @app.get("/v1/providers/diagrams")

@@ -1,0 +1,35 @@
+version: "1.0.0"
+quality:
+  length_limits:
+    enabled: true
+    min_length: 0
+    max_length: 100000
+    per_endpoint:
+      /v1/images/generate:
+        min_length: 0
+        max_length: 50000
+      /v1/videos/generate:
+        min_length: 0
+        max_length: 100000
+  
+  format_validation:
+    enabled: true
+    required_fields:
+      - "data"
+      - "provider"
+    allowed_formats:
+      - "json"
+    strict_validation: false
+  
+  quality_checks:
+    enabled: true
+    min_coherence_score: 0.5
+    min_relevance_score: 0.5
+    check_image_quality: true
+    min_image_resolution: 256
+  
+  toxicity:
+    enabled: true
+    threshold: 0.7
+    block_on_toxicity: true
+
