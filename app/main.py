@@ -19,6 +19,7 @@ from app.cost_tracking import cost_tracker, estimate_request_cost
 from app.caching import get_cache_manager
 from app.routing import select_provider, execute_with_fallback
 from app.cost_control import estimate_and_check_cost, get_budget_tracker
+from app.security import check_content_filter, detect_prompt_injection, detect_and_mask_pii, sanitize_response
 from prometheus_fastapi_instrumentator import Instrumentator
 
 
@@ -146,6 +147,23 @@ async def generate_images(req: ImageGenerationRequest):
     """Generate images using various AI providers."""
     logger.info("Image generation request", provider=req.provider, style=req.style)
     
+    # Security checks on prompt
+    content_allowed, content_error = check_content_filter(req.prompt)
+    if not content_allowed:
+        logger.warn("Content filter blocked request", error=content_error)
+        raise HTTPException(status_code=400, detail=content_error)
+    
+    prompt_safe, prompt_warning = detect_prompt_injection(req.prompt)
+    if not prompt_safe:
+        logger.warn("Prompt injection detected", warning=prompt_warning)
+        raise HTTPException(status_code=400, detail=prompt_warning)
+    
+    # Detect and mask PII in prompt
+    sanitized_prompt, pii_detected = detect_and_mask_pii(req.prompt)
+    if pii_detected:
+        logger.warn("PII detected in prompt, using masked version")
+        req.prompt = sanitized_prompt
+    
     # Check cache
     cache_manager = get_cache_manager()
     cache_key = f"image:{req.provider}:{req.prompt}:{req.style}:{req.size or 'default'}"
@@ -224,6 +242,10 @@ async def generate_images(req: ImageGenerationRequest):
             provider=selected_provider,
             prompt=req.prompt,
         )
+        
+        # Sanitize response
+        sanitized_response = sanitize_response(response.dict())
+        response = ImageGenerationResponse(**sanitized_response)
         
         # Store in cache
         cache_manager.set(cache_key, response, "/v1/images/generate")
@@ -358,6 +380,16 @@ def get_budget_status():
     """Get current budget status."""
     budget_tracker = get_budget_tracker()
     return budget_tracker.get_status()
+
+
+@app.post("/v1/security/reload")
+def reload_security_policies():
+    """Reload security policies (hot reload)."""
+    from app.security.policy import get_security_policy_loader
+    policy_loader = get_security_policy_loader()
+    policy_loader.reload()
+    logger.info("Security policies reloaded")
+    return {"status": "success", "message": "Security policies reloaded"}
 
 
 @app.get("/v1/providers/diagrams")

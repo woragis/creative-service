@@ -1,0 +1,38 @@
+version: "1.0.0"
+security:
+  content_filter:
+    enabled: true
+    blocked_patterns:
+      - "<script"
+      - "javascript:"
+      - "onerror="
+      - "onload="
+      - "eval("
+    blocked_keywords: []
+  
+  pii_detection:
+    enabled: true
+    mask_email: true
+    mask_phone: true
+    mask_ssn: true
+    mask_credit_card: true
+    mask_pattern: "***REDACTED***"
+  
+  prompt_injection:
+    enabled: true
+    suspicious_patterns:
+      - "ignore previous instructions"
+      - "forget everything"
+      - "system:"
+      - "assistant:"
+      - "you are now"
+      - "override"
+      - "bypass"
+    threshold: 0.7
+  
+  sanitization:
+    enabled: true
+    remove_html_tags: true
+    remove_script_tags: true
+    max_length: 100000
+
