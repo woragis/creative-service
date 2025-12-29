@@ -11,7 +11,12 @@ from app.providers import ImageProviderFactory, DiagramProviderFactory, VideoPro
 from app.config import settings
 from app.logger import configure_logging, get_logger
 from app.middleware import RequestIDMiddleware, RequestLoggerMiddleware
+from app.middleware_slo import SLOTrackingMiddleware
+from app.middleware_timeout import TimeoutMiddleware
 from app.tracing import init_tracing
+from app.graceful_shutdown import lifespan
+from app.cost_tracking import cost_tracker, estimate_request_cost
+from app.caching import get_cache_manager
 from prometheus_fastapi_instrumentator import Instrumentator
 
 
@@ -37,11 +42,18 @@ try:
 except Exception as e:
     logger.warn("Failed to initialize tracing", error=str(e))
 
-app = FastAPI(title="Woragis Creative Service", version="0.1.0", description="AI-powered image, diagram, and video generation for technical content")
+app = FastAPI(
+    title="Woragis Creative Service", 
+    version="0.1.0", 
+    description="AI-powered image, diagram, and video generation for technical content",
+    lifespan=lifespan
+)
 
-# Add middleware for request ID and logging
+# Add middleware for request ID, logging, SLO tracking, and timeouts
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(RequestLoggerMiddleware)
+app.add_middleware(SLOTrackingMiddleware)
+app.add_middleware(TimeoutMiddleware)
 
 # Add Prometheus metrics instrumentation
 Instrumentator().instrument(app).expose(app)
@@ -132,7 +144,20 @@ async def generate_images(req: ImageGenerationRequest):
     """Generate images using various AI providers."""
     logger.info("Image generation request", provider=req.provider, style=req.style)
     
+    # Check cache
+    cache_manager = get_cache_manager()
+    cache_key = f"image:{req.provider}:{req.prompt}:{req.style}:{req.size or 'default'}"
+    cached_response = cache_manager.get(cache_key)
+    
+    if cached_response is not None:
+        logger.info("Cache hit for image generation", provider=req.provider)
+        return cached_response
+    
     try:
+        # Track cost
+        estimated_cost = estimate_request_cost(req.provider, "/v1/images/generate")
+        cost_tracker.record_api_call(req.provider, "default")
+        
         provider = ImageProviderFactory.create(req.provider)
         
         # Use enhanced prompt for OpenAI if style is provided
@@ -165,11 +190,19 @@ async def generate_images(req: ImageGenerationRequest):
         for item in results:
             normalized.append(ImageData(url=item.get("url"), b64_json=item.get("b64_json")))
         
-        return ImageGenerationResponse(
+        # Track cost
+        cost_tracker.record_request("/v1/images/generate", req.provider, estimated_cost)
+        
+        response = ImageGenerationResponse(
             data=normalized,
             provider=req.provider,
             prompt=req.prompt,
         )
+        
+        # Store in cache
+        cache_manager.set(cache_key, response, "/v1/images/generate")
+        
+        return response
     except Exception as e:
         logger.exception("Image generation error", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
