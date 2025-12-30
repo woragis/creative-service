@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  creative-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: creative-service
+    ports:
+      - "8000:8000"
+    environment:
+      # Policies path (unified structure)
+      - POLICIES_PATH=/app/policies
+      - CACHING_POLICIES_PATH=/app/policies
+      - COST_CONTROL_POLICIES_PATH=/app/policies
+      - FEATURE_FLAGS_POLICIES_PATH=/app/policies
+      - QUALITY_POLICIES_PATH=/app/policies
+      - RESILIENCE_POLICIES_PATH=/app/policies
+      - ROUTING_POLICIES_PATH=/app/policies
+      - SECURITY_POLICIES_PATH=/app/policies
+      
+      # API Keys (set via .env or secrets)
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - STABILITY_API_KEY=${STABILITY_API_KEY}
+      - CIPHER_API_KEY=${CIPHER_API_KEY}
+      - REPLICATE_API_KEY=${REPLICATE_API_KEY}
+      - RUNWAY_API_KEY=${RUNWAY_API_KEY}
+      
+      # Service config
+      - ENV=development
+      - LOG_LEVEL=info
+      - CORS_ENABLED=true
+      - CORS_ALLOWED_ORIGINS=*
+    volumes:
+      # Policies (unified structure)
+      - ./policies:/app/policies:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+

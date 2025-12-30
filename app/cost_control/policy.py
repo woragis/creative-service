@@ -28,7 +28,7 @@ class CostControlPolicy:
 
 
 class CostControlPolicyLoader:
-    def __init__(self, policies_path: str = "/app/cost_control/policies"):
+    def __init__(self, policies_path: str = "/app/policies")
         self.policies_path = Path(policies_path)
         self.logger = get_logger()
         self._policy: Optional[CostControlPolicy] = None
@@ -78,7 +78,7 @@ _cost_control_policy_loader: Optional[CostControlPolicyLoader] = None
 def get_cost_control_policy_loader() -> CostControlPolicyLoader:
     global _cost_control_policy_loader
     if _cost_control_policy_loader is None:
-        policies_path = os.getenv("COST_CONTROL_POLICIES_PATH", "/app/cost_control/policies")
+        policies_path = os.getenv("COST_CONTROL_POLICIES_PATH", "/app/policies")
         _cost_control_policy_loader = CostControlPolicyLoader(policies_path=policies_path)
     return _cost_control_policy_loader
 

@@ -272,10 +272,33 @@ creative-service/
 │       ├── cipher_image.py  # Cipher images
 │       ├── diagram_generator.py  # Mermaid/Graphviz diagram generation
 │       └── video_generator.py    # Video/GIF generation
+├── policies/                 # Unified policies directory
+│   ├── caching.yaml         # Caching policies
+│   ├── cost_control.yaml    # Cost control policies
+│   ├── features.yaml        # Feature flags
+│   ├── quality.yaml         # Quality policies
+│   ├── resilience.yaml      # Resilience policies
+│   ├── routing.yaml         # Routing policies
+│   └── security.yaml        # Security policies
 ├── Dockerfile
 ├── requirements.txt
 └── env.sample
 ```
+
+### Policies Structure
+
+All policies are organized in a unified `policies/` directory at the root level:
+
+- **Main policy files** at `policies/` root:
+  - `caching.yaml` - Cache TTL, size limits, semantic similarity
+  - `cost_control.yaml` - Budget limits, token limits, cost routing
+  - `features.yaml` - Feature flags for providers and endpoints
+  - `quality.yaml` - Length limits, format validation, quality checks
+  - `resilience.yaml` - Retry strategies, circuit breakers, timeouts
+  - `routing.yaml` - Provider selection, fallback chains
+  - `security.yaml` - Content filtering, PII detection, sanitization
+
+Policies can be reloaded without restarting the service via API endpoints.
 
 ## Development
 

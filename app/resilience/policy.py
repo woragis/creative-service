@@ -59,7 +59,7 @@ class ResiliencePolicy:
 
 
 class ResiliencePolicyLoader:
-    def __init__(self, policies_path: str = "/app/resilience/policies"):
+    def __init__(self, policies_path: str = "/app/policies")
         self.policies_path = Path(policies_path)
         self.logger = get_logger()
         self._policy: Optional[ResiliencePolicy] = None
@@ -114,7 +114,7 @@ _resilience_policy_loader: Optional[ResiliencePolicyLoader] = None
 def get_resilience_policy_loader() -> ResiliencePolicyLoader:
     global _resilience_policy_loader
     if _resilience_policy_loader is None:
-        policies_path = os.getenv("RESILIENCE_POLICIES_PATH", "/app/resilience/policies")
+        policies_path = os.getenv("RESILIENCE_POLICIES_PATH", "/app/policies")
         _resilience_policy_loader = ResiliencePolicyLoader(policies_path=policies_path)
     return _resilience_policy_loader
 

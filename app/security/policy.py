@@ -65,7 +65,7 @@ class SecurityPolicy:
 
 
 class SecurityPolicyLoader:
-    def __init__(self, policies_path: str = "/app/security/policies"):
+    def __init__(self, policies_path: str = "/app/policies")
         self.policies_path = Path(policies_path)
         self.logger = get_logger()
         self._policy: Optional[SecurityPolicy] = None
@@ -118,7 +118,7 @@ _security_policy_loader: Optional[SecurityPolicyLoader] = None
 def get_security_policy_loader() -> SecurityPolicyLoader:
     global _security_policy_loader
     if _security_policy_loader is None:
-        policies_path = os.getenv("SECURITY_POLICIES_PATH", "/app/security/policies")
+        policies_path = os.getenv("SECURITY_POLICIES_PATH", "/app/policies")
         _security_policy_loader = SecurityPolicyLoader(policies_path=policies_path)
     return _security_policy_loader
 

@@ -35,7 +35,7 @@ class CachingPolicy:
 
 
 class CachingPolicyLoader:
-    def __init__(self, policies_path: str = "/app/caching/policies"):
+    def __init__(self, policies_path: str = "/app/policies"):
         self.policies_path = Path(policies_path)
         self.logger = get_logger()
         self._policy: Optional[CachingPolicy] = None
@@ -87,7 +87,7 @@ _caching_policy_loader: Optional[CachingPolicyLoader] = None
 def get_caching_policy_loader() -> CachingPolicyLoader:
     global _caching_policy_loader
     if _caching_policy_loader is None:
-        policies_path = os.getenv("CACHING_POLICIES_PATH", "/app/caching/policies")
+        policies_path = os.getenv("CACHING_POLICIES_PATH", "/app/policies")
         _caching_policy_loader = CachingPolicyLoader(policies_path=policies_path)
     return _caching_policy_loader
 

@@ -40,7 +40,7 @@ class FeatureFlagsPolicy:
 
 
 class FeatureFlagsPolicyLoader:
-    def __init__(self, policies_path: str = "/app/features/policies"):
+    def __init__(self, policies_path: str = "/app/policies"):
         self.policies_path = Path(policies_path)
         self.logger = get_logger()
         self._policy: Optional[FeatureFlagsPolicy] = None
@@ -94,7 +94,7 @@ _feature_flags_policy_loader: Optional[FeatureFlagsPolicyLoader] = None
 def get_feature_flags_loader() -> FeatureFlagsPolicyLoader:
     global _feature_flags_policy_loader
     if _feature_flags_policy_loader is None:
-        policies_path = os.getenv("FEATURE_FLAGS_POLICIES_PATH", "/app/features/policies")
+        policies_path = os.getenv("FEATURE_FLAGS_POLICIES_PATH", "/app/policies")
         _feature_flags_policy_loader = FeatureFlagsPolicyLoader(policies_path=policies_path)
     return _feature_flags_policy_loader
 

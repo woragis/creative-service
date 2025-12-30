@@ -32,7 +32,7 @@ class RoutingPolicy:
 
 
 class RoutingPolicyLoader:
-    def __init__(self, policies_path: str = "/app/routing/policies"):
+    def __init__(self, policies_path: str = "/app/policies")
         self.policies_path = Path(policies_path)
         self.logger = get_logger()
         self._policy: Optional[RoutingPolicy] = None
@@ -93,7 +93,7 @@ _routing_policy_loader: Optional[RoutingPolicyLoader] = None
 def get_routing_policy_loader() -> RoutingPolicyLoader:
     global _routing_policy_loader
     if _routing_policy_loader is None:
-        policies_path = os.getenv("ROUTING_POLICIES_PATH", "/app/routing/policies")
+        policies_path = os.getenv("ROUTING_POLICIES_PATH", "/app/policies")
         _routing_policy_loader = RoutingPolicyLoader(policies_path=policies_path)
     return _routing_policy_loader
 
